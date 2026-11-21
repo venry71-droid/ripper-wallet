@@ -153,9 +153,11 @@ main{padding:2px 11px}
 <section class="page" id="transfer">
 <div class="panel">
 <h3>Transfer</h3>
-<input id="recipient" placeholder="Recipient name">
-<select id="bank"><option value="">Select bank</option><option>Access Bank</option><option>First Bank</option><option>GTBank</option><option>UBA</option><option>Zenith Bank</option></select>
-<input id="account" placeholder="Demo account number" inputmode="numeric">
+<input id="recipient" placeholder="Verified account name" readonly>
+<select id="bank"><option value="">Loading Nigerian banks...</option></select>
+<input id="account" placeholder="10-digit account number" inputmode="numeric" maxlength="10">
+<button class="primary" type="button" onclick="lookupAccount()">Verify account name</button>
+<div id="accountStatus" class="notice">Select a bank and enter an account number to verify.</div>
 <input id="amount" type="number" placeholder="Amount">
 <button class="primary" onclick="transfer()">Continue</button>
 <div class="notice">Practice transaction only. No real payment is made.</div>
@@ -172,6 +174,25 @@ main{padding:2px 11px}
 </div>
 </section>
 <section class="page" id="history"><div class="panel"><h3>Transaction History</h3><div id="records">No transactions yet.</div></div></section>
+<section class="page" id="receipt">
+<div class="panel" id="receiptCard" style="padding:22px">
+<button type="button" onclick="show('history')" style="border:0;background:none;padding:8px 0;color:#16865b">← Back to history</button>
+<div style="text-align:center;padding:20px 0">
+<div style="font-size:34px">✓</div>
+<h2 style="margin:8px 0">Transaction Receipt</h2>
+<div id="receiptStatus" style="color:#16865b;font-weight:bold">COMPLETED</div>
+<h1 id="receiptAmount" style="font-size:30px;margin:18px 0">₦0.00</h1>
+</div>
+<hr>
+<div style="display:flex;justify-content:space-between;padding:12px 0"><span>Recipient</span><b id="receiptName"></b></div>
+<div style="display:flex;justify-content:space-between;padding:12px 0"><span>Bank</span><b id="receiptBank"></b></div>
+<div style="display:flex;justify-content:space-between;padding:12px 0"><span>Account number</span><b id="receiptAccount"></b></div>
+<div style="display:flex;justify-content:space-between;padding:12px 0"><span>Reference</span><b id="receiptRef"></b></div>
+<div style="display:flex;justify-content:space-between;padding:12px 0"><span>Date</span><b id="receiptDate"></b></div>
+<div style="margin-top:18px;padding:10px;text-align:center;background:#eef8f2;border-radius:8px;font-size:11px;color:#39765b">RIPPER WALLET · SIMULATED TRANSACTION · NO FUNDS TRANSFERRED</div>
+<button class="primary" onclick="downloadReceipt()" style="width:100%;margin-top:18px">Download Receipt</button>
+</div>
+</section>
 <section class="page" id="services"><div class="panel"><h3>Services</h3><p>Practice service menu</p><div class="notice">No real bill or service payments are available.</div></div></section>
 <section class="page" id="rewards"><div class="panel"><h3>Rewards</h3><p>Your practice rewards area.</p></div></section>
 <section class="page" id="wealth"><div class="panel"><h3>Wealth</h3><p>Simulated savings features.</p></div></section>
@@ -186,7 +207,64 @@ main{padding:2px 11px}
 <button class="nav" data-id="me" onclick="show('me')"><span>♙</span>Me</button>
 </nav>
 <script>
+const API_BASE = "https://cold-hat-15c8.venry71.workers.dev";
 let balance=27360780.99,records=[];
+let verifiedAccount = null;
+
+async function loadBanks(){
+  const select = document.getElementById("bank");
+  try {
+    const response = await fetch(API_BASE + "/banks");
+    const result = await response.json();
+    if (!response.ok || !result.status) throw new Error(result.message || "Bank list unavailable");
+    select.innerHTML = '<option value="">Select bank</option>';
+    result.data.forEach(bank => {
+      const option = document.createElement("option");
+      option.value = bank.code;
+      option.textContent = bank.name;
+      select.appendChild(option);
+    });
+    document.getElementById("accountStatus").textContent =
+      result.count + " Nigerian banks loaded. Enter account details to verify.";
+  } catch (error) {
+    select.innerHTML = '<option value="">Could not load banks</option>';
+    document.getElementById("accountStatus").textContent =
+      "Bank list unavailable. Please refresh and try again.";
+  }
+}
+
+async function lookupAccount(){
+  const account = document.getElementById("account").value.trim();
+  const bank = document.getElementById("bank").value;
+  const status = document.getElementById("accountStatus");
+  const recipient = document.getElementById("recipient");
+
+  verifiedAccount = null;
+  recipient.value = "";
+
+  if (!/^\d{10}$/.test(account) || !bank) {
+    status.textContent = "Select a bank and enter a valid 10-digit account number.";
+    return;
+  }
+
+  status.textContent = "Checking account name...";
+  try {
+    const query = new URLSearchParams({account_number: account, bank_code: bank});
+    const response = await fetch(API_BASE + "/resolve?" + query.toString());
+    const result = await response.json();
+
+    if (!response.ok || !result.status) {
+      throw new Error(result.message || "Account lookup failed");
+    }
+
+    verifiedAccount = {account, bank};
+    recipient.value = result.data.account_name;
+    status.textContent = "Account name found: " + result.data.account_name +
+      ".";
+  } catch (error) {
+    status.textContent = "Could not verify this account. " + error.message;
+  }
+}
 function fmt(n){return '₦'+n.toLocaleString('en-NG',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function show(id){
 document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -198,15 +276,51 @@ function safe(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 function update(){
 document.getElementById('balance').textContent=fmt(balance)+' ›';
 document.getElementById('walletbalance').textContent=fmt(balance);
-document.getElementById('records').innerHTML=records.map(r=>`<div class="entry"><div>${safe(r.name)}<small>${safe(r.date)} · SIMULATED</small></div><b>${r.type==='in'?'+':'−'}${fmt(r.amount)}</b></div>`).join('')||'No transactions yet.';
+document.getElementById('records').innerHTML=records.map((r,i)=>`<button type="button" class="entry" onclick="openReceipt(${i})" style="width:100%;display:flex;justify-content:space-between;text-align:left;border:0;background:transparent;padding:14px 4px;cursor:pointer;color:inherit"><div>${safe(r.name)}<small>${safe(r.date)} · View receipt ›</small></div><b>${r.type==='in'?'+':'−'}${fmt(r.amount)}</b></button>`).join('')||'No transactions yet.';
 }
-function addRecord(name,amount,type){records.unshift({name,amount,type,date:new Date().toLocaleString()});update()}
+function addRecord(name,amount,type,details={}){
+records.unshift({
+name,amount,type,
+date:new Date().toLocaleString(),
+reference:'RIP-'+Date.now()+'-'+Math.floor(Math.random()*900+100),
+bank:details.bank||'—',
+account:details.account||'—',
+recipient:details.recipient||name
+});
+update();
+}
+function openReceipt(index){
+const r=records[index];
+if(!r)return;
+document.getElementById('receiptAmount').textContent=fmt(r.amount);
+document.getElementById('receiptName').textContent=r.recipient;
+document.getElementById('receiptBank').textContent=r.bank;
+document.getElementById('receiptAccount').textContent=r.account;
+document.getElementById('receiptRef').textContent=r.reference;
+document.getElementById('receiptDate').textContent=r.date;
+document.getElementById('receiptStatus').textContent=r.type==='in'?'RECORDED':'COMPLETED';
+show('receipt');
+}
+function downloadReceipt(){
+const card=document.getElementById('receiptCard');
+const w=window.open('','_blank');
+if(!w){alert('Allow pop-ups to download the receipt.');return}
+w.document.write('<html><head><title>RIPPER Wallet Receipt</title><style>body{font-family:Arial,sans-serif;padding:25px;color:#173b2d}button{display:none}#receiptCard{max-width:500px;margin:auto}</style></head><body>'+card.outerHTML+'</body></html>');
+w.document.close();
+w.focus();
+w.print();
+}
 function transfer(){
 let name=document.getElementById('recipient').value.trim(),bank=document.getElementById('bank').value,amount=Number(document.getElementById('amount').value);
+let account=document.getElementById('account').value.trim();
+if(!verifiedAccount||verifiedAccount.account!==account||verifiedAccount.bank!==bank){alert('Verify the account name first.');return}
 if(!name||!bank||!amount||amount<=0){alert('Complete all required fields.');return}
 if(amount>balance){alert('Insufficient practice balance.');return}
 if(!confirm('Simulate this transfer? No real payment will be made.'))return;
-balance-=amount;addRecord('Practice transfer to '+name,amount,'out');show('history');
+balance-=amount;
+const bankName=document.getElementById('bank').selectedOptions[0].textContent;
+addRecord('Transfer to '+name,amount,'out',{recipient:name,bank:bankName,account:account});
+show('history');
 }
 function adjust(){
 let amount=Number(document.getElementById('fundamount').value),type=document.getElementById('operation').value;
@@ -217,6 +331,9 @@ addRecord(type==='add'?'Practice funds added':'Practice funds withdrawn',amount,
 }
 function reset(){if(confirm('Reset practice wallet?')){balance=27360780.99;records=[];update();show('home')}}
 update();
+loadBanks();
+document.getElementById('account').addEventListener('input',()=>{verifiedAccount=null;document.getElementById('recipient').value='';document.getElementById('accountStatus').textContent='Account changed. Verify it again.';});
+document.getElementById('bank').addEventListener('change',()=>{verifiedAccount=null;document.getElementById('recipient').value='';document.getElementById('accountStatus').textContent='Bank changed. Verify the account again.';});
 </script>
 <style>
 #lockScreen{position:fixed;inset:0;z-index:99999;background:#071b16;display:flex;align-items:center;justify-content:center;padding:24px;font-family:Arial,sans-serif}
